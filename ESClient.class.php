@@ -1,6 +1,6 @@
 <?php
 /**
- * Yaec: Yet Another ElasticSearch Client (v0.1)  -  27/March/2014
+ * Yaec: Yet Another ElasticSearch Client (v0.1)
  * 
  * Copyright (C) 2014  Ernesto Giralt (egiralt@gmail.com) 
  *  This program is free software: you can redistribute it and/or modify
@@ -21,7 +21,7 @@ namespace Yaec;
 DEFINE ('ERROR_EMPTY_RESPONSE', 'Valores no encontrados');
 DEFINE ('ERROR_INVALID_SEARCH', 'Búsqueda no válida');
 
-use \Yaec\Exceptions as Exception;
+use \Yaec\Exceptions as Exception;	
 /**
  * Clase principal 
  */
@@ -30,10 +30,16 @@ use \Yaec\Exceptions as Exception;
  	const ELASTICSEARCH_DEFAULT_PORT = 9200;
 	const ELASTICSEARCH_DEFAULT_SERVER = 'localhost';
 	
+	const CLUSTER_STATUS_RED 	= 'red';
+	const CLUSTER_STATUS_YELLOW = 'red';
+	const CLUSTER_STATUS_GREEN 	= 'red';
+	
 	private $Index;
 	private $Server				= 'localhost';
 	private $Port				= 9200;
 	private $ScriptsDirectory 	= 'scripts';
+	private $ClusterStatus;
+	private $Error;
 	
 	public function __construct ($indexName, $serverAddress = null, $port = null)
 	{
@@ -43,8 +49,33 @@ use \Yaec\Exceptions as Exception;
 		$this->SetServer ( isset($serverAddress) ? $serverAddress : Yaec_ESClient::ELASTICSEARCH_DEFAULT_SERVER);
 		$this->SetPort( isset($port) ? $port : Yaec_ESClient::ELASTICSEARCH_DEFAULT_PORT);
 		$this->SetDefaultIndex($indexName);
+		
+		$this->QueryClusterStatus ();
 	}
 
+
+	protected function QueryClusterStatus ()
+	{
+		$url = $this->GetBaseUrl().'/_cluster/health';
+		$result =	$this->DoQuery(null, null, $url);
+		if (!isset($result->error))
+			$this->ClusterStatus =$result;
+		else 
+			$this->SetError($result);
+		
+		return $result;
+	}
+
+	public function GetDetailedClusterStatus ()
+	{
+		return $this->ClusterStatus;	
+	}	
+	
+	public function GetClusterStatus ()
+	{
+		return $this->ClusterStatus->status;
+	}
+	
 	public function SetPort ($port)
 	{
 		$this->Port = $port;	
@@ -64,15 +95,31 @@ use \Yaec\Exceptions as Exception;
 	{
 		return $this->Server;
 	}
-	
+
 	public function SetDefaultIndex ($indexName)
 	{
 		$this->Index = $indexName;	
 	}
 		
+
 	public function GetDefaultIndex()
 	{
 		return $this->Index;
+	}
+	
+	/**
+	 * Fija el directorio desde donde se leerán los scripts a ejecutar.	 * 
+	 * @param string $path Ruta física del directorio de scripts
+	 * @return ESClient
+	 */
+	public function SetScriptsDirectory ($path)
+	{
+		if (!is_dir($path))
+			throw new Exception\Yaec_ScriptsDirectoryNotFoundException($path);
+		
+		$this->ScriptsDirectory = $path;
+
+		return $this;
 	}
 	
 	/**
@@ -96,7 +143,7 @@ use \Yaec\Exceptions as Exception;
 	public function GetMapping ($type)
 	{
 		$result = null;
-		$url = sprintf('%s/_mapping/%s',$this->GetBaseUrl (), $type);
+		$url = sprintf('%s/_mapping/%s',$this->GetBaseIndexUrl (), $type);
 		
 		$mapping = $this->DoQuery (null,null, $url);
 		if (isset($mapping->{$this->GetIndexName()}))
@@ -121,12 +168,21 @@ use \Yaec\Exceptions as Exception;
 	}
 	
 	
+	
+
+	/**
+	 * Retorna un elemento de un tipo determinado usando su ID
+	 * @param type $type 
+	 * @param type $id 
+	 * @param type $routing 
+	 * @return type
+	 */
 	public function GetItem ($type, $id, $routing = null)
 	{
 		$result = null;
 		
-		$url = sprintf ('%s/%s/%s', $this->GetBaseUrl(), $type, $id);
-		
+		$url = sprintf ('%s/%s/%s', $this->GetBaseIndexUrl(), $type, $id);
+			
 		if ($routing != null)
 			$url .= '?routing='.$routing;
 		
@@ -134,18 +190,26 @@ use \Yaec\Exceptions as Exception;
 		
 		if ($data->found)
 			$result = $data->_source;
+		else
+			$result = $data;
 		
 		return $result;
 	}
-	
+
+
 	/**
-	 * Usado para lanzar las consultas
-	 * 
-	 */
+		 * Realiza una consulta al servidor ES usando los parámetros
+		 * @param stdClass $query 
+		 * @param string $type 
+		 * @param string $url 
+		 * @param string $routing 
+		 * @param string $method 
+		 * @return stdClass
+		 */	
 	public function DoQuery($query, $type = null, $url = null, $routing = null, $method = "GET")
 	{
 		if ($type === null && $url === null && $this->_url === null)
-			throw new Exception("Se requiere indicar un tipo del repositorio. Use el constructor de la clase o índiquelo en el momento de la búsqueda", 1);
+			throw new \Exception("Se requiere indicar un tipo del repositorio. ", 1);
 		elseif ($type != null && $url == null)
 			$url = $this->BuildSearchQueryURL($type, false, $routing);
 			
@@ -155,6 +219,7 @@ use \Yaec\Exceptions as Exception;
 		else 
 			$data = '';
 		
+		$this->SetError(null); // Eliminar el error antes de lanzar
 		$ch = curl_init();
 		curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
 		curl_setopt($ch, CURLOPT_PORT, $this->GetPort());	
@@ -177,9 +242,11 @@ use \Yaec\Exceptions as Exception;
 			$errobj = new \stdClass();
 			$errobj->error_number =curl_errno($ch);
 			$errobj->error =curl_error($ch);
-			$response = json_encode($errobj); 
+			$response = json_encode($errobj);
+			
+			$this->SetError( $errobj); 
 		};
-		
+		//echo "<pre>"; print_r ($response); die();
 		curl_close($ch); // Se cierra la consulta
 		
 		$result = json_decode($response);
@@ -189,9 +256,9 @@ use \Yaec\Exceptions as Exception;
 
 
 	 /**
-	  * Retorna una lista de elementos elemento
+	  * Retorna una lista de elementos elemento de un tipo, determinado por su UUID
 	  */
-	 public function MatchMany ($type, $searchValue, $routing = null, $count = null)
+	 public function MatchMany ($type, $searchValues, $routing = null, $count = null)
 	 {
 	 	$customURL = $this->BuildSearchQueryURL($type, false, $routing);
 	 	
@@ -217,7 +284,6 @@ use \Yaec\Exceptions as Exception;
 		if ($count !==  null && is_numeric($count))
 			$query->size = $count;
 
-		print_r ($query);						
 		$resultSet = $this->DoQuery($query, $type, $customURL);
 		
 		$result = array();
@@ -233,11 +299,15 @@ use \Yaec\Exceptions as Exception;
 
 	 /**
 	  * Retorna el primer elemento que cumpla con el valor en el campo específicado
+	  * @param string $type 
+	  * @param string $searchValue 
+	  * @param string $routing 
+	  * @return stdClass
 	  */
 	 public function MatchOne ($type, $searchValue, $routing = null)
 	 {
 	 	$result = null;
-	 	$resultSet = $this->MatchMany($type, $searchValue, $routing, 1);
+	 	$resultSet = $this->MatchMany($type, $pairKV, $routing, 1);
 		
 		if ($resultSet && count($resultSet) > 0)
 			$result = $resultSet[0];			
@@ -247,16 +317,24 @@ use \Yaec\Exceptions as Exception;
 	
 	/**
 	 * Ejecuta un script almacenado en /include/ElasticSearch/scripts y devuelve el resultado.
+	 * @param type $scriptName 
+	 * @param type $paramsArray 
+	 * @param type $type 
+	 * @param type $url 
+	 * @param type $routing 
+	 * @return type
 	 */
-	function ExecScript ($scriptFileName, $paramsArray = array(), $type = null, $url = null, $routing = null)
+	function ExecScript ($scriptName, $paramsArray = array(), $type = null, $url = null, $routing = null)
 	{
+		$scriptFileName = $this->ScriptsDirectory.'/'.preg_replace('/\.json$/i','', $scriptName).'.json';
+		
 		if (!file_exists($scriptFileName))
 			throw new Exception\Yaec_ScriptNotFoundException(); 
 		
 		// Leer y sustituir todos los parámetros que se encuentran allí
 		$jsonSource = file_get_contents($scriptFileName);
 		$eResult = array();
-		$today = new DateTime();
+		$today = new \DateTime();
 		if (preg_match_all("/\{\{([^\}]*)\}\}/", $jsonSource, $eResult ))
 		{
 			foreach ($eResult[1] as $foundParam) // Se toman todos los patrones encontrados 
@@ -273,7 +351,7 @@ use \Yaec\Exceptions as Exception;
 							if (count($metas) > 1)
 								$value = $today->format(trim($metas[1]));
 							else 
-								throw new Exception("Se requiere el parámetro <format> para #current_date", 1000);
+								throw new Exception\Yaec_BadScriptFormatException("Se requiere el parámetro <format> para #current_date", 1000);
 							break;
 						case '#yesterday' :
 							if (count($metas) > 1)
@@ -282,9 +360,9 @@ use \Yaec\Exceptions as Exception;
 								$value = $today->format(trim($metas[1]));
 							}
 							else 
-								throw new Exception("Se requiere el parámetro <format> para #current_date", 1000);
+								throw new Exception\Yaec_BadScriptFormatException("Se requiere el parámetro <format> para #current_date", 1000);
 							break;
-					}
+					} 
 				}
 				else
 					if (!empty($paramsArray)) 
@@ -297,9 +375,9 @@ use \Yaec\Exceptions as Exception;
 			} // foreach
 		} // if
 
-		$jsonObj = json_decode($jsonSource);		
+		$jsonObj = json_decode($jsonSource); 	
 		if ($jsonObj == null)
-			throw new Exception("Script inválido", 1);
+			throw new  Exception\Yaec_BadScriptFormatException("Script inválido");
 	
 		$result = $this->DoQuery($jsonObj, $type, $url, $routing);
 		
@@ -396,14 +474,25 @@ use \Yaec\Exceptions as Exception;
 /***************************** Construir las URLs según el tipo de operacion *******************************************/
 
 	/**
-	 * Retorna la base del URL, incluyendo el servidor y el puerto.
+	 * Retorna la base del URL para el índice
 	 */
 	protected function GetBaseUrl ()
 	{
 		if ($this->GetServer() == null || $this->GetPort() == null)
 			throw new Exception\Yaec_BadConnectionParametersException();
 		
-		return sprintf ('%s:%s/%s', $this->GetServer(), $this->GetPort(), $this->GetDefaultIndex());		
+		return sprintf ('%s:%s', $this->GetServer(), $this->GetPort());		
+	}	 	
+
+	/**
+	 * Retorna la base del URL para el índice
+	 */
+	protected function GetBaseIndexUrl ()
+	{
+		if ($this->GetServer() == null || $this->GetPort() == null)
+			throw new Exception\Yaec_BadConnectionParametersException();
+		
+		return sprintf ('%s/%s', $this->GetBaseUrl(), $this->GetDefaultIndex());		
 	}	 	
 	
 	/**
@@ -411,7 +500,7 @@ use \Yaec\Exceptions as Exception;
 	 */
 	 protected function BuildSearchQueryURL ($type = null, $isCount = false, $routing = null) 
 	 {
-	 	$base_url = $this->GetBaseUrl ();
+	 	$base_url = $this->GetBaseIndexUrl ();
 		
 		if (!empty($type)) // Si se indica un type, se modifica el URL
 			$result = sprintf ('%s/%s/_search', $base_url, $type);
@@ -435,7 +524,7 @@ use \Yaec\Exceptions as Exception;
 	 */
 	 protected function BuildSuggestURL ($routing = null)
 	 {
-	 	$result = sprintf('%s/_suggest', $this->GetBaseUrl());
+	 	$result = sprintf('%s/_suggest', $this->GetBaseIndexUrl());
 		
 		if ($routing != null)
 			$result .= "?routing=$routing";
@@ -445,7 +534,7 @@ use \Yaec\Exceptions as Exception;
 	
 	protected function BuildDeleteQuery ($type, $id, $routing = null)
 	{
-		$result = $this->GetBaseUrl ().sprintf('/%s/%s', $type, $id);
+		$result = $this->GetBaseIndexUrl ().sprintf('/%s/%s', $type, $id);
 		if ($routing !== null)
 		{
 			$result .= '?routing='.$routing;
@@ -456,7 +545,7 @@ use \Yaec\Exceptions as Exception;
 
 	protected function BuildSaveQuery ($type, $id, $routing = null)
 	{
-		$result = sprintf('%s/%s/%s',$this->GetBaseUrl (), $type, $id);
+		$result = sprintf('%s/%s/%s',$this->GetBaseIndexUrl (), $type, $id);
 		if ($routing !== null)
 		{
 			$result .= '?routing='.$routing;
@@ -467,16 +556,29 @@ use \Yaec\Exceptions as Exception;
 
 
 	/**
-	 * 
+	 * Genera una URL base para una solicitud de update al server
+	 * @param [type] $key     [description]
+	 * @param [type] $type    [description]
+	 * @param [type] $routing [description]
 	 */
 	 protected function BuildUpdateURL ($key, $type, $routing = null)
 	 {
-	 	$result = sprintf('%s/%s/%s/_update', $this->GetBaseUrl(), $key);
+	 	$result = sprintf('%s/%s/%s/_update', $this->GetBaseIndexUrl(), $key);
 		
 		if ($routing != null)
 			$result .= "?routing=$routing";
 		
 		return $result;	
+	 }
+	 
+	 protected function SetError ($errorNode)
+	 {
+	 	$this->Error = $errorNode;	 	
+	 }
+	 
+	 public function GetError ()
+	 {
+	 	return $this->Error;
 	 } 
 		
  
