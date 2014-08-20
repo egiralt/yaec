@@ -37,9 +37,11 @@ class Yaec_Loader
         if (0 !== strpos($class, 'Yaec\\')) {
             return;
         }
+        
+        $result = preg_match ('/(^.*)(Yaec_\w+)$/', $class, $matches);
 		$file = dirname(__FILE__)
-			.preg_replace('/^Yaec/', '', dirname($class))
-			.'/'.preg_replace('/^Yaec_/', '', basename($class))
+			.preg_replace ('@\\@','', $matches[1])
+			.'/'.preg_replace ('/Yaec_/', '', $matches[2])
 			.'.class.php';
 		
         if (is_file($file))
