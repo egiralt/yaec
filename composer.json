@@ -1,0 +1,23 @@
+{
+    "name": "yaec/yaec",
+    "type": "library",
+    "description": "Yet Another ElasticSearch PHP Client",
+    "keywords": ["elasticsearch"],
+    "homepage": "https://github.com/egiralt/yaec",
+    "license": "GPL",
+    "authors": [
+        {
+            "name": "Ernesto Giralt",
+            "email": "egiralt@gmail.com",
+        },
+    ],
+    },
+    "require": {
+        "php": ">=5.2.4"
+    },
+    "autoload": {
+        "psr-0" : {
+            "Yaec_" : "src/"
+        }
+    }
+}
