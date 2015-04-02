@@ -16,37 +16,13 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  * 
  */
+namespace Yaec\Exceptions;
 
-class Yaec_Loader
+class Yaec_BaseException extends \Exception
 {
-    /**
-     *
-     */
-    public static function register()
+    public function __toString() 
     {
-    	
-        if (version_compare(phpversion(), '5.3.0', '>=')) {
-            spl_autoload_register(array(__CLASS__, '__autoload'), true, true);
-        } else {
-            spl_autoload_register(array(__CLASS__, '__autoload'));
-        }
+        return 'Yaec error in '.__CLASS__ . ": ({$this->code}) {$this->message}\n";
     }
-
-    public static function __autoload($class)
-    {
-        if (0 !== strpos($class, 'Yaec\\')) {
-            return;
-        }
-        
-        $result = preg_match ('/(^.*)(Yaec_\w+)$/', $class, $matches);
-		$file = dirname(__FILE__).'/src/Yaec'
-			.preg_replace ('@\\@','', $matches[1])
-			.'/'.preg_replace ('/Yaec_/', '', $matches[2])
-			.'.class.php';
-		
-        if (is_file($file))
-		{
-            require_once $file;
-        }
-    }
+	
 }

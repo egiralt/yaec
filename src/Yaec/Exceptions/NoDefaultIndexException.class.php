@@ -16,37 +16,16 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  * 
  */
+namespace Yaec\Exceptions;
 
-class Yaec_Loader
+class Yaec_NoDefaultIndexException extends Yaec_BaseException
 {
-    /**
-     *
-     */
-    public static function register()
+    // Redefine the exception so message isn't optional
+    public function __construct(Exception $previous = null) 
     {
-    	
-        if (version_compare(phpversion(), '5.3.0', '>=')) {
-            spl_autoload_register(array(__CLASS__, '__autoload'), true, true);
-        } else {
-            spl_autoload_register(array(__CLASS__, '__autoload'));
-        }
+		//TODO:Habrá alguna biblioteca que usar para las traducciones?        
+		$message = 'No default index. You have to indicate it using SetDefaultIndex of the Client class';
+        parent::__construct($message, -1, $previous);
     }
 
-    public static function __autoload($class)
-    {
-        if (0 !== strpos($class, 'Yaec\\')) {
-            return;
-        }
-        
-        $result = preg_match ('/(^.*)(Yaec_\w+)$/', $class, $matches);
-		$file = dirname(__FILE__).'/src/Yaec'
-			.preg_replace ('@\\@','', $matches[1])
-			.'/'.preg_replace ('/Yaec_/', '', $matches[2])
-			.'.class.php';
-		
-        if (is_file($file))
-		{
-            require_once $file;
-        }
-    }
 }
