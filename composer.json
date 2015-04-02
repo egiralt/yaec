@@ -8,10 +8,9 @@
     "authors": [
         {
             "name": "Ernesto Giralt",
-            "email": "egiralt@gmail.com",
-        },
+            "email": "egiralt@gmail.com"
+        }
     ],
-    },
     "require": {
         "php": ">=5.2.4"
     },
