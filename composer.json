@@ -11,7 +11,7 @@
             "email": "egiralt@gmail.com"
         }
     ],
-    "minimum-stability": "dev",
+    "minimum-stability": ["dev","stable"],
     "require": {
         "php": ">=5.2.4"
     },
