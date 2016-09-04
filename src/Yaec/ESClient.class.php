@@ -16,16 +16,17 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  * 
  */
-namespace Yaec;
+namespace Yaec\YaecBundle;
 
 DEFINE ('ERROR_EMPTY_RESPONSE', 'Valores no encontrados');
 DEFINE ('ERROR_INVALID_SEARCH', 'Búsqueda no válida');
 
-use \Yaec\Exceptions as Exception;	
+use Yaec\Exceptions as Exception;
+	
 /**
  * Clase principal 
  */
- class Yaec_ESClient
+ class ESClient
  {
  	const ELASTICSEARCH_DEFAULT_PORT = 9200;
 	const ELASTICSEARCH_DEFAULT_SERVER = 'localhost';
@@ -46,8 +47,8 @@ use \Yaec\Exceptions as Exception;
 		if (!isset($indexName))
 			throw new Exception\Yaec_NoDefaultIndexException ();
 			
-		$this->SetServer ( isset($serverAddress) ? $serverAddress : Yaec_ESClient::ELASTICSEARCH_DEFAULT_SERVER);
-		$this->SetPort( isset($port) ? $port : Yaec_ESClient::ELASTICSEARCH_DEFAULT_PORT);
+		$this->SetServer ( isset($serverAddress) ? $serverAddress : self::ELASTICSEARCH_DEFAULT_SERVER);
+		$this->SetPort( isset($port) ? $port : self::ELASTICSEARCH_DEFAULT_PORT);
 		$this->SetDefaultIndex($indexName);
 		
 		$this->QueryClusterStatus ();
@@ -157,18 +158,11 @@ use \Yaec\Exceptions as Exception;
 	 */
 	public function DoUpdate ($document, $key, $type, $routing = null)
 	{
-		$docToUpdate = new \stdClass();
-		$docToUpdate->doc = $document;
-		
 		$url = $this->BuildUpdateURL ($key, $type, $routing);
-		
-		$response = $this->DoQuery ($docToUpdate, null, $url, $routing);
+		$result = $this->DoQuery ($document, null, $url, $routing, 'POST');
 		
 		return $result;			
-	}
-	
-	
-	
+	}	
 
 	/**
 	 * Retorna un elemento de un tipo determinado usando su ID
@@ -209,7 +203,7 @@ use \Yaec\Exceptions as Exception;
 	public function DoQuery($query, $type = null, $url = null, $routing = null, $method = "GET")
 	{
 		if ($type === null && $url === null && $this->_url === null)
-			throw new \Exception("Se requiere indicar un tipo del repositorio. ", 1);
+			throw new \Exception("Se requiere indicar un tipo del repositorio. ", 1);//TODO: Colocar una clase propia para la excepción
 		elseif ($type != null && $url == null)
 			$url = $this->BuildSearchQueryURL($type, false, $routing);
 			
@@ -237,7 +231,7 @@ use \Yaec\Exceptions as Exception;
 		
 		//make the request
 		$response = curl_exec($ch);
-		if (empty($response))
+		if ($response === false)
 		{
 			$errobj = new \stdClass();
 			$errobj->error_number =curl_errno($ch);
@@ -245,54 +239,145 @@ use \Yaec\Exceptions as Exception;
 			$response = json_encode($errobj);
 			
 			$this->SetError( $errobj); 
-		};
+		}
+		else 
+		{
+			$result = json_decode($response);
+			// Si hay un error, simplemente se lanza la excepcion con ese error
+			if (!empty($result->error))
+				throw new Exceptions\QueryErrorException($result->error);
+				
+		}
+
 		//echo "<pre>"; print_r ($response); die();
 		curl_close($ch); // Se cierra la consulta
-		
-		$result = json_decode($response);
 		
 		return $result;
 	}
 
-
-	 /**
-	  * Retorna una lista de elementos elemento de un tipo, determinado por su UUID
-	  */
-	 public function MatchMany ($type, $searchValues, $routing = null, $count = null)
-	 {
-	 	$customURL = $this->BuildSearchQueryURL($type, false, $routing);
-	 	
-	 	if (is_array($searchValue) && count($searchValue) > 1)
+	/**
+	 ** Prepara un fragmento "match" para los queries
+	 **/
+	protected function prepareMatchFromArray ($searchValues, $fuzzy = false, $fuzziness = 'AUTO')
+	{
+		$result = new \stdClass();
+		 
+	 	if (is_array($searchValues) && count($searchValues) > 1)
 		{// Si es una búsqueda de varios campos, se usa una búsqueda múltiple
-		 	$query->query->bool->must = array();
-		 	foreach ($searchValue as $key => $value )
+			$result->query = new \stdClass();
+			$result->query->bool = new \stdClass();
+			
+		 	$result->query->bool->must = array();
+		 	foreach ($searchValues as $key => $value )
 			{
 				$match = new \stdClass();
-		 		$match->match->$key = ($value === null ? '' : $value);// Hay que garantizar que no de error por un null mal puesto
-		 		$query->query->bool->must[] = $match;
+				$match->match = new \stdClass();
+				
+		 		$match->match->$key =  new \stdClass ();
+		 		$match->match->$key->query = ($value === null ? '' : $value);// Hay que garantizar que no de error por un null mal puesto
+		 		
+		 		if ($fuzzy)
+		 		{
+		 			$match->match->$key->fuzziness = $fuzziness; // Nivel de fuzziness del match
+		 			$match->match->$key->operator = 'or';
+				}
+		 					 			
+		 		$result->query->bool->must[] = $match;
 			}
 		}
 		else 
 		{
 			// Se usa el operador match simple!
-			$field = is_array($searchValue) ? array_keys($searchValue)[0] : '_id';
-			$value = is_array($searchValue) ? array_values($searchValue)[0] : $searchValue;
+			$field = is_array($searchValues) ? array_keys($searchValues)[0] : '_id';
+			$value = is_array($searchValues) ? array_values($searchValues)[0] : $searchValues;
 			
-		 	$query->query->match->$field = ($value !== null ? $value : '');// Hay que garantizar que no de error por un null mal puesto
+			$result->query = new \stdClass();
+			$result->query->match = new \stdClass();
+			
+		 	$result->query->match->$field = new \stdClass();
+		 	$result->query->match->$field->query  = ($value !== null ? $value : '');// Hay que garantizar que no de error por un null mal puesto
+			if ($fuzzy)
+				$result->query->match->$field->fuzziness = $fuzziness; 
+					 	
 		}
 		
+		return $result;
+	}
+
+	/**
+	 * Realiza una búsqueda usando el comando "fuzzy"
+	 * 
+	 * @param unknown $type
+	 * @param unknown $searchValues
+	 * @param string $routing
+	 * @param string $count
+	 * @param string $sortArray
+	 * @param string $fuzziness
+	 * @return multitype:unknown
+	 */
+	public function FuzzyMatchMany ($type, $searchValues, $routing = null, $count = null, $sortArray = null, $fuzziness = 'AUTO')
+	{
+		$result = $this->MatchMany ($type, $searchValues, $routing, $count, $sortArray, true, $fuzziness);
+		//print_r ($result); die();
+		
+		return $result;	
+	}
+	
+	 /**
+	  * Retorna una lista de elementos elemento de un tipo, determinado por su UUID
+	  */
+	 public function MatchMany ($type, $searchValues, $routing = null, $count = null, $sortArray = null, $fuzzy = false, $fuzziness = 'AUTO')
+	 {
+	 	$customURL = $this->BuildSearchQueryURL($type, false, $routing);
+
+	 	$query = $this->prepareMatchFromArray ($searchValues, $fuzzy, $fuzziness);
+	 	
+	 	//print_r ($query); die();
 		if ($count !==  null && is_numeric($count))
 			$query->size = $count;
-
-		$resultSet = $this->DoQuery($query, $type, $customURL);
+			
+		//echo json_encode ($query); die();
 		
-		$result = array();
-		if ($resultSet && $resultSet->hits->total > 0)
+		if (!empty($sortArray))
 		{
-			foreach ($resultSet->hits->hits as $item)			
-				$result[] = $item->_source;
+			$query->sort = array();
+			foreach ($sortArray as $field => $mode)
+			{
+				if (!is_integer ($field)) // para el formato 'campo' => 'asc'/'desc'
+				{
+					$sortItem = new \stdClass();
+					$sortItem->$field = new \stdClass();
+					$sortItem->$field->order = $mode;
+					
+					$query->sort[] = $sortItem;
+				}
+				else // Para cuando no se indica la dirección del ordenamiento y solo se ponen los campos 
+				{
+					$query->sort[] = $mode; // el campo mode tiene el nombre del campo!							
+				}
+								
+			}
 		}
 		
+		$resultSet = $this->DoQuery($query, $type, $customURL);
+		//echo "<pre>"; print_r ($resultSet); die();
+		
+		$result = array();
+		if ($resultSet && !empty($resultSet->hits) && $resultSet->hits->total > 0)
+		{
+			foreach ($resultSet->hits->hits as $item)
+			{			
+				//echo "<pre>"; print_r ($item); die();
+				$source = $item->_source;
+				$source->_score = $item->_score;
+				$source->_maxScore = $resultSet->hits->max_score;
+				$source->_total = $resultSet->hits->total;
+				$source->_id = $item->_id;
+				
+				$result[]= $source;
+			}
+		}
+	
 		//echo "<pre>"; print_r ($result); die();
 		return $result;
 	 }
@@ -304,7 +389,7 @@ use \Yaec\Exceptions as Exception;
 	  * @param string $routing 
 	  * @return stdClass
 	  */
-	 public function MatchOne ($type, $searchValue, $routing = null)
+	 public function MatchOne ($type, $pairKV, $routing = null)
 	 {
 	 	$result = null;
 	 	$resultSet = $this->MatchMany($type, $pairKV, $routing, 1);
@@ -456,18 +541,27 @@ use \Yaec\Exceptions as Exception;
 	
 //****************************************  Funciones para almacenar documentos ******************************/
 
-	public function SaveItem ($type, $item, $id,$routing = null)
+	public function SaveItem ($type, $item, $id = null, $routing = null)
 	{
 		$url = $this->BuildSaveQuery($type, $id, $routing);
-		return $this->DoQuery($item, null, $url, $routing, 'PUT');
+		return $this->DoQuery($item, null, $url, $routing, 'POST'); // Se pone type=null porque ya está en el URL..
 	} 
 	
 //************************************** funciones para borrar documentos ************************************/
 
+	public function DeleteBySearch ($type,  $queryValues = array(), $routing = null)
+	{
+		$query = $this->prepareMatchFromArray ($queryValues);
+		$url = $this->BuildDeleteQueryBySearch($type, $routing);
+		
+		return $this->DoQuery($query, null, $url, $routing, 'DELETE');
+	} 
 
-	public function DeleteItem ($type, $item, $id, $routing = null)
+	public function DeleteItem ($type, $id, $routing = null)
 	{
 		$url = $this->BuildDeleteQuery($type, $id, $routing);
+		echo $url; die();
+		
 		return $this->DoQuery(null, null, $url, $routing, 'DELETE');
 	} 
 	
@@ -541,11 +635,25 @@ use \Yaec\Exceptions as Exception;
 		}	
 		
 		return $result;
+	}
+	
+	protected function BuildDeleteQueryBySearch ($type, $routing = null)
+	{
+		$result = $this->GetBaseIndexUrl ().sprintf('/%s/_query', $type);
+		if ($routing !== null)
+		{
+			$result .= '?routing='.$routing;
+		}	
+		
+		return $result;
 	}	
 
-	protected function BuildSaveQuery ($type, $id, $routing = null)
+	protected function BuildSaveQuery ($type, $id = null, $routing = null)
 	{
-		$result = sprintf('%s/%s/%s',$this->GetBaseIndexUrl (), $type, $id);
+		$result = sprintf('%s/%s',$this->GetBaseIndexUrl (), $type);
+		if (!empty($id))
+		  	$result .= '/'.$id;
+		  	
 		if ($routing !== null)
 		{
 			$result .= '?routing='.$routing;
@@ -553,7 +661,6 @@ use \Yaec\Exceptions as Exception;
 		
 		return $result;
 	}
-
 
 	/**
 	 * Genera una URL base para una solicitud de update al server
@@ -563,7 +670,7 @@ use \Yaec\Exceptions as Exception;
 	 */
 	 protected function BuildUpdateURL ($key, $type, $routing = null)
 	 {
-	 	$result = sprintf('%s/%s/%s/_update', $this->GetBaseIndexUrl(), $key);
+	 	$result = sprintf('%s/%s/%s', $this->GetBaseIndexUrl(), $type, $key);
 		
 		if ($routing != null)
 			$result .= "?routing=$routing";
@@ -583,5 +690,3 @@ use \Yaec\Exceptions as Exception;
 		
  
 } // class
-
-	
